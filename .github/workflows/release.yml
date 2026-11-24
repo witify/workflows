@@ -1,0 +1,131 @@
+name: Release
+
+# Reusable workflow. Creates the GitHub release, and its tag, when the release
+# pull request that release-pr.yml maintains is merged.
+#
+# A project needs one file, .github/workflows/release.yml:
+#
+#   name: Release
+#   on:
+#     pull_request:
+#       types: [closed]
+#   permissions:
+#     contents: write
+#   jobs:
+#     release:
+#       uses: witify/workflows/.github/workflows/release.yml@v1
+#
+# The version is the latest vX.Y.Z tag, raised by the bump written in the pull
+# request body: minor or major. Without a readable bump the release is minor.
+# A repository without any version tag starts at v1.0.0.
+
+on:
+  workflow_call:
+    inputs:
+      head:
+        description: Branch that holds the work to release. Same value as in release-pr.yml.
+        type: string
+        default: dev
+      base:
+        description: Branch that receives the release. Empty means the repository's default branch.
+        type: string
+        default: ""
+      dry_run:
+        description: Write the release to the run summary and create nothing.
+        type: boolean
+        default: false
+
+jobs:
+  release:
+    name: Release
+    # A pull request from a fork may also call its branch "dev".
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.merged == true
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.head.ref == inputs.head
+      && github.event.pull_request.base.ref == (inputs.base || github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          work="$(mktemp -d)"
+
+          # --- What the pull request says ----------------------------------
+
+          # Read from the event file: a long body does not fit in an environment variable.
+          jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH" | tr -d '\r' > "$work/body.md"
+
+          bump="$(awk '
+            $0 == "<!-- release-pr:start -->" { inside = 1 }
+            $0 == "<!-- release-pr:notes -->" || $0 == "<!-- release-pr:end -->" { inside = 0 }
+            inside && $0 == "<!-- release-pr:bump=minor -->" { print "minor"; exit }
+            inside && $0 == "<!-- release-pr:bump=major -->" { print "major"; exit }
+          ' "$work/body.md")"
+          if [ -z "$bump" ]; then
+            echo "::warning::The pull request body holds no readable bump: the release is minor."
+            bump="minor"
+          fi
+
+          awk '
+            $0 == "<!-- release-pr:notes -->" { inside = 1; next }
+            $0 == "<!-- release-pr:end -->" { inside = 0 }
+            inside { print }
+          ' "$work/body.md" > "$work/notes.md"
+          if ! grep -q '[^[:space:]]' "$work/notes.md"; then
+            cp "$work/body.md" "$work/notes.md"
+          fi
+
+          # --- Version -----------------------------------------------------
+
+          gh api --paginate "repos/$REPO/tags?per_page=100" --jq '.[] | [.name, .commit.sha] | @tsv' \
+            | awk -F '\t' '$1 ~ /^v?[0-9]+\.[0-9]+\.[0-9]+$/ { print }' > "$work/tags.tsv"
+
+          # The tag of an earlier run on the same merge: a second run never makes a second version.
+          version="$(awk -F '\t' -v sha="$MERGE_SHA" '$2 == sha { print $1 }' "$work/tags.tsv" | sort -V | tail -n 1)"
+
+          if [ -n "$version" ]; then
+            if gh release view "$version" --repo "$REPO" > /dev/null 2>&1; then
+              echo "Nothing to do: $version already releases this merge." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          else
+            latest="$(cut -f 1 "$work/tags.tsv" | sed 's/^v//' | sort -V | tail -n 1)"
+            if [ -z "$latest" ]; then
+              version="v1.0.0"
+            else
+              IFS=. read -r major minor _ <<< "$latest"
+              if [ "$bump" = "major" ]; then
+                version="v$((major + 1)).0.0"
+              else
+                version="v$major.$((minor + 1)).0"
+              fi
+            fi
+          fi
+
+          # --- Release -----------------------------------------------------
+
+          if [ "$DRY_RUN" = "true" ]; then
+            {
+              echo "Dry run: would release $version at $MERGE_SHA."
+              echo
+              cat "$work/notes.md"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          gh release create "$version" --repo "$REPO" --target "$MERGE_SHA" --title "$version" \
+            --notes-file "$work/notes.md" | tee -a "$GITHUB_STEP_SUMMARY"
