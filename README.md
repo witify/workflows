@@ -157,8 +157,9 @@ jobs:
 | `paths` | `public/build public/sw.js public/workbox-*.js` | Built files and folders to commit, separated by spaces. Globs are allowed; paths that do not exist are skipped. Laravel Mix: `public/css public/js public/mix-manifest.json`. |
 | `node-version` | `.nvmrc`, else `24` | Node version. |
 | `composer` | `false` | Install the composer dependencies before the build, for assets imported from `vendor/` (Ziggy, the Vue pages of the `witify/*` packages). |
-| `php-version` | `8.4` | PHP version, when `composer` is true. |
-| `php-extensions` | `mbstring, fileinfo, dom, mysql, imagick` | PHP extensions, when `composer` is true. |
+| `php-lint` | `false` | Refuse to publish a build while a PHP file does not parse (`php -l` on every tracked `.php` file except Blade views): two branches that each pass CI can still merge into PHP that does not parse. |
+| `php-version` | `8.4` | PHP version, when `composer` or `php-lint` is true. |
+| `php-extensions` | `mbstring, fileinfo, dom, mysql, imagick` | PHP extensions, when `composer` or `php-lint` is true. |
 | `dry_run` | `false` | Build and list the files that would be committed, but push nothing. |
 
 ### What to know
