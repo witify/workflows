@@ -1,0 +1,242 @@
+name: Deploy branch
+
+# Reusable workflow. Builds the frontend assets in CI and force-pushes source +
+# build to a deploy branch: the production branch -> deploy, dev -> deploy-dev.
+# The server pulls the deploy branch and never runs npm.
+#
+# A project needs one file, .github/workflows/build-deploy-branch.yml:
+#
+#   name: Build deploy branch
+#   on:
+#     push:
+#       branches: [dev, main]
+#     workflow_run:
+#       workflows: ["Laravel Pint"]
+#       types: [completed]
+#       branches: [dev, main]
+#   permissions:
+#     contents: write
+#   jobs:
+#     build:
+#       uses: witify/workflows/.github/workflows/deploy-branch.yml@v1
+#
+# The workflow_run trigger is for projects whose "Laravel Pint" workflow pushes
+# a "Fix styling" commit: a push made with GITHUB_TOKEN starts no `push` run, so
+# the deploy branch would miss that commit. With it, the workflow also runs when
+# Pint completes and always builds the tip of the branch.
+
+on:
+  workflow_call:
+    inputs:
+      production-branch:
+        description: Branch deployed to production. Empty means the repository's default branch.
+        type: string
+        default: ""
+      staging-branch:
+        description: Branch deployed to staging. Empty means no staging deploy.
+        type: string
+        default: dev
+      production-deploy-branch:
+        description: Branch the production build is pushed to.
+        type: string
+        default: deploy
+      staging-deploy-branch:
+        description: Branch the staging build is pushed to.
+        type: string
+        default: deploy-dev
+      build-command:
+        description: Command that builds the assets. Empty means `npm run build`, or `pnpm run build` with pnpm.
+        type: string
+        default: ""
+      package-manager:
+        description: npm or pnpm. Empty means pnpm when pnpm-lock.yaml exists, npm otherwise.
+        type: string
+        default: ""
+      pnpm-version:
+        description: pnpm version, when the package manager is pnpm and package.json has no packageManager field.
+        type: string
+        default: "10"
+      apt-packages:
+        description: System packages to install before the dependencies, separated by spaces (e.g. libpng-dev for native npm packages).
+        type: string
+        default: ""
+      paths:
+        description: Built files and folders to commit, separated by spaces. Globs are allowed; paths that do not exist are skipped.
+        type: string
+        default: public/build public/sw.js public/workbox-*.js
+      node-version:
+        description: Node version. Empty means the version of .nvmrc, or 24 without one.
+        type: string
+        default: ""
+      composer:
+        description: Install the composer dependencies before the build, for assets imported from vendor/ (Ziggy, the Vue pages of the witify/* packages).
+        type: boolean
+        default: false
+      php-lint:
+        description: Refuse to publish a build while a PHP file does not parse (php -l on every tracked .php file except Blade views). Two branches that each pass CI can still merge into PHP that does not parse.
+        type: boolean
+        default: false
+      php-version:
+        description: PHP version, when composer or php-lint is true.
+        type: string
+        default: "8.4"
+      php-extensions:
+        description: PHP extensions, when composer or php-lint is true.
+        type: string
+        default: mbstring, fileinfo, dom, mysql, imagick
+      dry_run:
+        description: Build and list the files that would be committed, but push nothing.
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    concurrency:
+      group: deploy-branch-${{ github.repository }}-${{ github.event.workflow_run.head_branch || github.ref_name }}
+      cancel-in-progress: true
+    env:
+      SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+      PRODUCTION_BRANCH: ${{ inputs.production-branch || github.event.repository.default_branch }}
+      STAGING_BRANCH: ${{ inputs.staging-branch }}
+    steps:
+      - name: Choose the deploy branch
+        id: target
+        run: |
+          set -euo pipefail
+          if [ "$SOURCE_BRANCH" = "$PRODUCTION_BRANCH" ]; then
+            target="${{ inputs.production-deploy-branch }}"
+          elif [ -n "$STAGING_BRANCH" ] && [ "$SOURCE_BRANCH" = "$STAGING_BRANCH" ]; then
+            target="${{ inputs.staging-deploy-branch }}"
+          else
+            echo "Nothing to deploy: '$SOURCE_BRANCH' is neither the production branch ('$PRODUCTION_BRANCH') nor the staging branch ('$STAGING_BRANCH')."
+            target=""
+          fi
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.target.outputs.target != ''
+        with:
+          ref: ${{ env.SOURCE_BRANCH }}
+
+      - name: Setup PHP
+        if: steps.target.outputs.target != '' && (inputs.composer || inputs.php-lint)
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: ${{ inputs.php-extensions }}
+          coverage: none
+
+      - name: Check PHP syntax
+        if: steps.target.outputs.target != '' && inputs.php-lint
+        shell: bash
+        run: git ls-files -z -- '*.php' ':!:*.blade.php' | xargs -0 -r -n 200 -P "$(nproc)" php -l -d display_errors=stderr > /dev/null
+
+      - name: Install composer dependencies
+        if: steps.target.outputs.target != '' && inputs.composer
+        uses: ramsey/composer-install@v3
+        with:
+          composer-options: "--no-dev --no-scripts"
+
+      - name: Package manager
+        if: steps.target.outputs.target != ''
+        id: pm
+        run: |
+          pm="${{ inputs.package-manager }}"
+          if [ -z "$pm" ]; then
+            if [ -f pnpm-lock.yaml ]; then pm=pnpm; else pm=npm; fi
+          fi
+          case "$pm" in
+            npm) install="npm ci" ;;
+            pnpm) install="pnpm install --frozen-lockfile" ;;
+            *) echo "::error::Unknown package manager '$pm': use npm or pnpm."; exit 1 ;;
+          esac
+          build="${{ inputs.build-command }}"
+          echo "name=$pm" >> "$GITHUB_OUTPUT"
+          echo "install=$install" >> "$GITHUB_OUTPUT"
+          echo "build=${build:-$pm run build}" >> "$GITHUB_OUTPUT"
+          if [ "$pm" = pnpm ] && ! jq -e '.packageManager // empty' package.json > /dev/null; then
+            echo "pnpm-version=${{ inputs.pnpm-version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup pnpm
+        if: steps.target.outputs.target != '' && steps.pm.outputs.name == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ steps.pm.outputs.pnpm-version }}
+
+      - name: Node version
+        if: steps.target.outputs.target != ''
+        id: node
+        run: |
+          if [ -n "${{ inputs.node-version }}" ]; then
+            echo "version=${{ inputs.node-version }}" >> "$GITHUB_OUTPUT"
+          elif [ -f .nvmrc ]; then
+            echo "file=.nvmrc" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=24" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        if: steps.target.outputs.target != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          node-version-file: ${{ steps.node.outputs.file }}
+          cache: ${{ steps.pm.outputs.name }}
+
+      - name: Install system packages
+        if: steps.target.outputs.target != '' && inputs.apt-packages != ''
+        run: sudo apt-get update -q && sudo apt-get install -y -q ${{ inputs.apt-packages }}
+
+      - name: Install dependencies
+        if: steps.target.outputs.target != ''
+        run: ${{ steps.pm.outputs.install }}
+
+      - name: Build assets
+        if: steps.target.outputs.target != ''
+        run: ${{ steps.pm.outputs.build }}
+
+      - name: Commit build and push to deploy branch
+        if: steps.target.outputs.target != ''
+        env:
+          TARGET: ${{ steps.target.outputs.target }}
+          PATHS: ${{ inputs.paths }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          existing=()
+          for pattern in $PATHS; do
+            for path in $pattern; do
+              [ -e "$path" ] && existing+=("$path")
+            done
+          done
+          if [ "${#existing[@]}" -eq 0 ]; then
+            echo "::error::None of the paths exists after the build: $PATHS"
+            exit 1
+          fi
+
+          source_sha="$(git rev-parse HEAD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f -- "${existing[@]}"
+          git commit -q -m "build: $source_sha"
+
+          {
+            echo "$SOURCE_BRANCH ($source_sha) -> $TARGET"
+            echo
+            git show --stat --format= HEAD | tail -n 1
+            printf -- '- %s\n' "${existing[@]}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git push -f origin "HEAD:$TARGET"
