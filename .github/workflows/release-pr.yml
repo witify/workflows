@@ -25,8 +25,9 @@ name: Release PR
 # Nothing is written to the repository: the changelog lives in the pull request
 # body, between two markers, and text written outside the markers is kept on
 # every refresh. Merge the release pull request with a merge commit, not a
-# squash: a squash leaves the released commits "ahead" and they come back in
-# the next changelog.
+# squash or a rebase: they leave the released commits "ahead" and they come
+# back in the next changelog. Strongly recommended: a ruleset on the default
+# branch that allows only merge commits (see the README, Release PR, Setup).
 
 on:
   workflow_call:
