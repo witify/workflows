@@ -68,6 +68,23 @@ EOF
 
 The `pull_request` rule also requires a pull request for every change to the default branch. The bypass (actor `5` is the repository admin role) lets admins keep pushing straight to it, for a hotfix. Remove `bypass_actors` to enforce the rule on everyone. In the UI: repository settings, Rules, Rulesets, "Require a pull request before merging", "Allowed merge methods": Merge.
 
+**Strongly recommended too: forbid deleting `dev`.** The release pull request has `dev` as its head branch, so "Automatically delete head branches", or one click on "Delete branch" after the merge, would delete the integration branch. A second ruleset blocks that, for everyone, admins included; pushes and force-pushes to `dev` are unchanged:
+
+```sh
+gh api --method POST repos/{owner}/{repo}/rulesets --input - <<'EOF'
+{
+  "name": "dev: deletion forbidden",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/dev"], "exclude": [] } },
+  "bypass_actors": [],
+  "rules": [{ "type": "deletion" }]
+}
+EOF
+```
+
+Use the branch of the `head` input when it is not `dev`. In the UI: repository settings, Rules, Rulesets, target `dev`, "Restrict deletions".
+
 ### Inputs
 
 | Input | Default | Purpose |
