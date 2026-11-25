@@ -40,50 +40,19 @@ The repository needs two things:
 - the organization secret `OPENAI_API_KEY` shared with it (organization settings, Secrets and variables, Actions);
 - "Allow GitHub Actions to create and approve pull requests" turned on (repository settings, Actions, General).
 
-**Strongly recommended: allow only merge commits into the default branch.** The release pull request must be merged with a merge commit (see [What to know](#what-to-know)). A ruleset removes "Squash and merge" and "Rebase and merge" from the merge button of every pull request into the default branch, so nobody picks the wrong one. Pull requests into `dev` keep every method. Create it once per project, from the project's folder:
+**Strongly recommended: set the custom property `release_flow` to `true` on the repository** (repository settings, Custom properties). Two organization rulesets target every repository where it is `true`, so a project has nothing else to create. From the command line, with a token that has the `admin:org` scope:
 
 ```sh
-gh api --method POST repos/{owner}/{repo}/rulesets --input - <<'EOF'
-{
-  "name": "Release: merge commit only",
-  "target": "branch",
-  "enforcement": "active",
-  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
-  "bypass_actors": [{ "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }],
-  "rules": [{
-    "type": "pull_request",
-    "parameters": {
-      "required_approving_review_count": 0,
-      "dismiss_stale_reviews_on_push": false,
-      "require_code_owner_review": false,
-      "require_last_push_approval": false,
-      "required_review_thread_resolution": false,
-      "require_extra_approval_for_unattributed_changes": false,
-      "allowed_merge_methods": ["merge"]
-    }
-  }]
-}
+gh api --method PATCH orgs/witify/properties/values --input - <<'EOF'
+{ "repository_names": ["<repo>"], "properties": [{ "property_name": "release_flow", "value": "true" }] }
 EOF
 ```
 
-The `pull_request` rule also requires a pull request for every change to the default branch. The bypass (actor `5` is the repository admin role) lets admins keep pushing straight to it, for a hotfix. Remove `bypass_actors` to enforce the rule on everyone. In the UI: repository settings, Rules, Rulesets, "Require a pull request before merging", "Allowed merge methods": Merge.
 
-**Strongly recommended too: forbid deleting `dev`.** The release pull request has `dev` as its head branch, so "Automatically delete head branches", or one click on "Delete branch" after the merge, would delete the integration branch. A second ruleset blocks that, for everyone, admins included; pushes and force-pushes to `dev` are unchanged:
+- **Release : merge commit seulement**: pull requests into the default branch can only be merged with a merge commit; "Squash and merge" and "Rebase and merge" disappear from the merge button. The release pull request must be merged that way (see [What to know](#what-to-know)). Pull requests into `dev` keep every method. The rule also requires a pull request for every change to the default branch; organization and repository admins bypass it, so they can still push a hotfix straight to it.
+- **dev : suppression interdite**: nobody can delete `dev`, admins included. The release pull request has `dev` as its head branch, so "Automatically delete head branches", or one click on "Delete branch" after the merge, would otherwise delete the integration branch. Pushes and force-pushes to `dev` are unchanged.
 
-```sh
-gh api --method POST repos/{owner}/{repo}/rulesets --input - <<'EOF'
-{
-  "name": "dev: deletion forbidden",
-  "target": "branch",
-  "enforcement": "active",
-  "conditions": { "ref_name": { "include": ["refs/heads/dev"], "exclude": [] } },
-  "bypass_actors": [],
-  "rules": [{ "type": "deletion" }]
-}
-EOF
-```
-
-Use the branch of the `head` input when it is not `dev`. In the UI: repository settings, Rules, Rulesets, target `dev`, "Restrict deletions".
+Both live in the organization settings, Repository, Rulesets, and appear in each repository's settings, Rules, Rulesets. The repository's default branch must be the branch that receives releases (`main` or `master`), not `dev`: the first ruleset targets the default branch.
 
 ### Inputs
 
@@ -100,7 +69,7 @@ Use the branch of the `head` input when it is not `dev`. In the UI: repository s
 
 - **Manual notes are kept.** The generated block sits between `<!-- release-pr:start -->` and `<!-- release-pr:end -->`. Text written outside the markers survives every refresh.
 - **It never blocks a release.** Without `OPENAI_API_KEY`, or when the API fails, the pull request lists the merged pull requests as they are, the version is `minor` and the run shows a warning.
-- **Merge the release pull request with a merge commit.** A squash or a rebase puts new commits on the default branch, so the commits of `dev` are never part of its history: they stay ahead, come back in the next changelog and deployment notes, and the two branches can conflict later. The release itself is still created. Merging the default branch back into `dev` does not fix it; only resetting `dev` to the default branch does. The ruleset of the [setup](#setup) prevents the mistake.
+- **Merge the release pull request with a merge commit.** A squash or a rebase puts new commits on the default branch, so the commits of `dev` are never part of its history: they stay ahead, come back in the next changelog and deployment notes, and the two branches can conflict later. The release itself is still created. Merging the default branch back into `dev` does not fix it; only resetting `dev` to the default branch does. The `release_flow` property of the [setup](#setup) prevents the mistake.
 - **CI does not run on the release pull request.** GitHub starts no workflow for a pull request the `GITHUB_TOKEN` opened. A project whose default branch requires checks needs a GitHub App token instead.
 - **Try it first** on a project with `dry_run: true`.
 

@@ -26,8 +26,9 @@ name: Release PR
 # body, between two markers, and text written outside the markers is kept on
 # every refresh. Merge the release pull request with a merge commit, not a
 # squash or a rebase: they leave the released commits "ahead" and they come
-# back in the next changelog. Strongly recommended: a ruleset on the default
-# branch that allows only merge commits (see the README, Release PR, Setup).
+# back in the next changelog. Strongly recommended: set the custom property
+# release_flow to true on the repository, so the organization rulesets allow
+# only merge commits into the default branch (see the README, Release PR, Setup).
 
 on:
   workflow_call:
