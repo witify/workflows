@@ -150,7 +150,10 @@ jobs:
 | `staging-branch` | `dev` | Branch deployed to staging. Empty means no staging deploy. |
 | `production-deploy-branch` | `deploy` | Branch the production build is pushed to. |
 | `staging-deploy-branch` | `deploy-dev` | Branch the staging build is pushed to. |
-| `build-command` | `npm run build` | Command that builds the assets: `npm run production` for Laravel Mix. |
+| `build-command` | `npm run build` (`pnpm run build` with pnpm) | Command that builds the assets: `npm run production` for Laravel Mix. |
+| `package-manager` | `pnpm` with a `pnpm-lock.yaml`, else `npm` | `npm` or `pnpm`. |
+| `pnpm-version` | `10` | pnpm version, when `package.json` has no `packageManager` field. |
+| `apt-packages` | none | System packages installed before the dependencies, separated by spaces (`libpng-dev` for native npm packages). |
 | `paths` | `public/build public/sw.js public/workbox-*.js` | Built files and folders to commit, separated by spaces. Globs are allowed; paths that do not exist are skipped. Laravel Mix: `public/css public/js public/mix-manifest.json`. |
 | `node-version` | `.nvmrc`, else `24` | Node version. |
 | `composer` | `false` | Install the composer dependencies before the build, for assets imported from `vendor/` (Ziggy, the Vue pages of the `witify/*` packages). |

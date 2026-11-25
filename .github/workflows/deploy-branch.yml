@@ -45,9 +45,21 @@ on:
         type: string
         default: deploy-dev
       build-command:
-        description: Command that builds the assets.
+        description: Command that builds the assets. Empty means `npm run build`, or `pnpm run build` with pnpm.
         type: string
-        default: npm run build
+        default: ""
+      package-manager:
+        description: npm or pnpm. Empty means pnpm when pnpm-lock.yaml exists, npm otherwise.
+        type: string
+        default: ""
+      pnpm-version:
+        description: pnpm version, when the package manager is pnpm and package.json has no packageManager field.
+        type: string
+        default: "10"
+      apt-packages:
+        description: System packages to install before the dependencies, separated by spaces (e.g. libpng-dev for native npm packages).
+        type: string
+        default: ""
       paths:
         description: Built files and folders to commit, separated by spaces. Globs are allowed; paths that do not exist are skipped.
         type: string
@@ -121,6 +133,33 @@ jobs:
         with:
           composer-options: "--no-dev --no-scripts"
 
+      - name: Package manager
+        if: steps.target.outputs.target != ''
+        id: pm
+        run: |
+          pm="${{ inputs.package-manager }}"
+          if [ -z "$pm" ]; then
+            if [ -f pnpm-lock.yaml ]; then pm=pnpm; else pm=npm; fi
+          fi
+          case "$pm" in
+            npm) install="npm ci" ;;
+            pnpm) install="pnpm install --frozen-lockfile" ;;
+            *) echo "::error::Unknown package manager '$pm': use npm or pnpm."; exit 1 ;;
+          esac
+          build="${{ inputs.build-command }}"
+          echo "name=$pm" >> "$GITHUB_OUTPUT"
+          echo "install=$install" >> "$GITHUB_OUTPUT"
+          echo "build=${build:-$pm run build}" >> "$GITHUB_OUTPUT"
+          if [ "$pm" = pnpm ] && ! jq -e '.packageManager // empty' package.json > /dev/null; then
+            echo "pnpm-version=${{ inputs.pnpm-version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup pnpm
+        if: steps.target.outputs.target != '' && steps.pm.outputs.name == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ steps.pm.outputs.pnpm-version }}
+
       - name: Node version
         if: steps.target.outputs.target != ''
         id: node
@@ -139,15 +178,19 @@ jobs:
         with:
           node-version: ${{ steps.node.outputs.version }}
           node-version-file: ${{ steps.node.outputs.file }}
-          cache: npm
+          cache: ${{ steps.pm.outputs.name }}
+
+      - name: Install system packages
+        if: steps.target.outputs.target != '' && inputs.apt-packages != ''
+        run: sudo apt-get update -q && sudo apt-get install -y -q ${{ inputs.apt-packages }}
 
       - name: Install dependencies
         if: steps.target.outputs.target != ''
-        run: npm ci
+        run: ${{ steps.pm.outputs.install }}
 
       - name: Build assets
         if: steps.target.outputs.target != ''
-        run: ${{ inputs.build-command }}
+        run: ${{ steps.pm.outputs.build }}
 
       - name: Commit build and push to deploy branch
         if: steps.target.outputs.target != ''
