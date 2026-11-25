@@ -111,6 +111,60 @@ jobs:
 - **Only the release pull request makes a release.** A hotfix merged straight into the default branch makes none; its changes are part of the next one.
 - **A second run on the same merge makes no second release.**
 
+## Deploy branch
+
+Builds the frontend assets in CI and force-pushes the source and the build to a deploy branch: the production branch to `deploy`, `dev` to `deploy-dev`. The server (Forge) deploys the deploy branch and never runs npm.
+
+### Setup
+
+Add `.github/workflows/build-deploy-branch.yml` to the project, on `dev` and on the production branch:
+
+```yaml
+name: Build deploy branch
+
+on:
+  push:
+    branches: [dev, main]
+  workflow_run:
+    workflows: ["Laravel Pint"]
+    types: [completed]
+    branches: [dev, main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: witify/workflows/.github/workflows/deploy-branch.yml@v1
+```
+
+- Use `master` instead of `main` in both `branches` lists when the production branch is `master`.
+- Keep the `workflow_run` trigger only when the project has a "Laravel Pint" workflow (use its exact `name`) that pushes a "Fix styling" commit. A push made with `GITHUB_TOKEN` starts no `push` run, so without it the deploy branch misses that commit.
+- Then point the Forge site at `deploy` (production) or `deploy-dev` (staging).
+
+### Inputs
+
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `production-branch` | the default branch | Branch deployed to production. |
+| `staging-branch` | `dev` | Branch deployed to staging. Empty means no staging deploy. |
+| `production-deploy-branch` | `deploy` | Branch the production build is pushed to. |
+| `staging-deploy-branch` | `deploy-dev` | Branch the staging build is pushed to. |
+| `build-command` | `npm run build` | Command that builds the assets: `npm run production` for Laravel Mix. |
+| `paths` | `public/build public/sw.js public/workbox-*.js` | Built files and folders to commit, separated by spaces. Globs are allowed; paths that do not exist are skipped. Laravel Mix: `public/css public/js public/mix-manifest.json`. |
+| `node-version` | `.nvmrc`, else `24` | Node version. |
+| `composer` | `false` | Install the composer dependencies before the build, for assets imported from `vendor/` (Ziggy, the Vue pages of the `witify/*` packages). |
+| `php-version` | `8.4` | PHP version, when `composer` is true. |
+| `php-extensions` | `mbstring, fileinfo, dom, mysql, imagick` | PHP extensions, when `composer` is true. |
+| `dry_run` | `false` | Build and list the files that would be committed, but push nothing. |
+
+### What to know
+
+- **Pass `production-branch` while the default branch is not the production branch** (a repository whose default branch is still `dev`). Otherwise the default is right.
+- **A push to any other branch builds nothing.** The run says so and succeeds.
+- **The build fails when none of the paths exists**, so a wrong `paths` or `build-command` shows as a red run instead of an empty deploy.
+- **The deploy branch is force-pushed on every run**: never commit to it by hand.
+
 ## Versions
 
 Projects call a major tag (`@v1`), never `@main`. A change merged to `main` reaches no project until the tag moves:
