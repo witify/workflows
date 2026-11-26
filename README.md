@@ -70,7 +70,11 @@ Both live in the organization settings, Repository, Rulesets, and appear in each
 - **Manual notes are kept.** The generated block sits between `<!-- release-pr:start -->` and `<!-- release-pr:end -->`. Text written outside the markers survives every refresh.
 - **It never blocks a release.** Without `OPENAI_API_KEY`, or when the API fails, the pull request lists the merged pull requests as they are, the version is `minor` and the run shows a warning.
 - **Merge the release pull request with a merge commit.** A squash or a rebase puts new commits on the default branch, so the commits of `dev` are never part of its history: they stay ahead, come back in the next changelog and deployment notes, and the two branches can conflict later. The release itself is still created. Merging the default branch back into `dev` does not fix it; only resetting `dev` to the default branch does. The `release_flow` property of the [setup](#setup) prevents the mistake.
-- **CI does not run on the release pull request.** GitHub starts no workflow for a pull request the `GITHUB_TOKEN` opened. A project whose default branch requires checks needs a GitHub App token instead.
+- **Run the checks on `dev` only.** Tests, Larastan, Pint and the other check workflows trigger on pull requests into `dev` and on pushes to `dev`, never on the default branch: give `push` and `pull_request` a `branches` filter without it, or `branches-ignore: [<default branch>]`. The release pull request merges with a merge commit, so the default branch receives the exact tree `dev` already checked; running the checks again finds nothing new. It also avoids two problems:
+  - github-actions[bot] opens the release pull request, so GitHub holds its `pull_request` runs for a maintainer's approval, then closes them as failed ("No jobs were run") when the pull request merges without that approval, and emails a "Run failed" for each;
+  - a Pint workflow on the default branch would push its "Fix styling" commit there, which the merge-commit ruleset blocks.
+
+  A hotfix goes through `dev` and a release. A project whose default branch requires status checks needs a GitHub App token to open the release pull request instead.
 - **Try it first** on a project with `dry_run: true`.
 
 ## Release
